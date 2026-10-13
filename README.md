@@ -4,6 +4,8 @@ Aplicación multi-tenant de cartelería digital con **React 19 + Tailwind CSS 4*
 
 Para probar el proyecto desde un ZIP en tu equipo, sigue [PRUEBA_LOCAL.md](PRUEBA_LOCAL.md).
 
+En Windows puedes iniciar la demostración haciendo doble clic en **`INICIAR_FULLSCREEN.cmd`** dentro de la carpeta extraída. Instala las dependencias en esa carpeta, conserva los datos entre inicios y abre el navegador cuando el servidor está disponible.
+
 ## Ejecutar
 
 Requisitos: **Node.js 24+**, npm y **FFprobe** (incluido en FFmpeg). No requiere un servicio de base de datos externo.

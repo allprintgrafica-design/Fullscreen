@@ -40,9 +40,9 @@ La versión de Node debe comenzar con `v24` o un número superior.
 
 ## 2. Extraer e iniciar
 
-1. Extrae `Fullscreen-local.zip`. Obtendrás una carpeta llamada `Fullscreen`.
-2. Abre una terminal **dentro de esa carpeta**, donde están `package.json` y `README.md`.
-3. Ejecuta los comandos, uno por uno:
+1. Extrae el ZIP completo. La carpeta puede llamarse `Fullscreen` o comenzar por `Fullscreen-codex-`, según dónde lo descargaste. Si aparece otra carpeta dentro, ábrela hasta ver `package.json`, `README.md` y `INICIAR_FULLSCREEN.cmd`.
+2. **En Windows, haz doble clic en `INICIAR_FULLSCREEN.cmd`.** Windows puede mostrarlo simplemente como `INICIAR_FULLSCREEN`. El archivo instala las dependencias del proyecto, prepara la demo y abre el navegador cuando la API y la web responden. Mantén abierta su ventana mientras uses la aplicación.
+3. Si prefieres iniciar desde una terminal, ábrela **dentro de la carpeta que contiene `package.json`** y ejecuta los comandos uno por uno. En PowerShell de Windows, usa `npm.cmd` en lugar de `npm`:
 
 ```bash
 npm ci
@@ -62,10 +62,10 @@ La API usa el puerto 3001 y el frontend el 5173. Ambos deben estar disponibles.
 
 ## 3. Accesos de demostración
 
-| Rol | Correo | Contraseña |
-| --- | --- | --- |
-| Cliente | `cliente@fullscreen.local` | `ClienteDemo2026!` |
-| Super administrador | `admin@fullscreen.local` | `AdminDemo2026!` |
+| Rol                 | Correo                     | Contraseña         |
+| ------------------- | -------------------------- | ------------------ |
+| Cliente             | `cliente@fullscreen.local` | `ClienteDemo2026!` |
+| Super administrador | `admin@fullscreen.local`   | `AdminDemo2026!`   |
 
 Para mantener abiertos ambos paneles a la vez, usa una ventana normal y otra de incógnito, o dos perfiles de navegador. Cada perfil mantiene una sesión de usuario.
 
@@ -99,18 +99,21 @@ Para detenerla, pulsa `Ctrl+C` en la terminal. Para volver a usarla, abre la mis
 npm run dev
 ```
 
-Los datos se conservan en `data/`. No necesitas repetir `npm ci` ni `seed` en cada inicio.
+En Windows también puedes volver a hacer doble clic en `INICIAR_FULLSCREEN.cmd`.
+
+Los datos se conservan en `data/`. El iniciador reutiliza las dependencias cuando el lockfile y la plataforma coinciden, y conserva usuarios y configuración local existentes.
 
 ## Si algo no funciona
 
-| Mensaje o problema | Qué comprobar |
-| --- | --- |
-| `node` o `npm` no se reconoce | Instala Node.js y abre una terminal nueva. |
-| Error con `node:sqlite` | Comprueba que Node.js sea 24 o superior. |
-| No encuentra `package.json` | Abre la terminal dentro de la carpeta `Fullscreen`. |
-| No encuentra `ffprobe` al subir videos | Instala FFmpeg con sus ejecutables en el PATH y reinicia la terminal. |
-| Puerto 5173 o 3001 ocupado | Cierra una ejecución anterior de esta aplicación o el programa que usa ese puerto. |
-| PIN incorrecto, vencido o utilizado | Genera un PIN nuevo desde Pantallas y úsalo en su player. |
-| El navegador no abre la aplicación | Comprueba que `npm run dev` siga activo y abre `http://localhost:5173` en el mismo equipo. |
+| Mensaje o problema                     | Qué comprobar                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `node` o `npm` no se reconoce          | Instala Node.js y abre una terminal nueva.                                                       |
+| Error con `node:sqlite`                | Comprueba que Node.js sea 24 o superior.                                                         |
+| No encuentra `package.json`            | Abre la terminal dentro de la carpeta `Fullscreen`.                                              |
+| Faltan los scripts `seed` o `dev`      | Comprueba que estás en el proyecto correcto; usa `INICIAR_FULLSCREEN.cmd` desde el ZIP completo. |
+| No encuentra `ffprobe` al subir videos | Instala FFmpeg con sus ejecutables en el PATH y reinicia la terminal.                            |
+| Puerto 5173 o 3001 ocupado             | Cierra una ejecución anterior de esta aplicación o el programa que usa ese puerto.               |
+| PIN incorrecto, vencido o utilizado    | Genera un PIN nuevo desde Pantallas y úsalo en su player.                                        |
+| El navegador no abre la aplicación     | Comprueba que `npm run dev` siga activo y abre `http://localhost:5173` en el mismo equipo.       |
 
 Las cuentas incluidas son para esta prueba local. La instalación de producción, los modelos y la API están documentados en `README.md`.
