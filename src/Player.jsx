@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { Expand, MonitorPlay, WifiOff } from 'lucide-react';
 import { api } from './api.js';
@@ -6,101 +6,182 @@ import { Button, Field, FormError } from './ui.jsx';
 
 // A sequence is keyed by the playlist revision/run, never by overlay visibility.
 export function MediaSequence({ playlist, loop = true, runId, onComplete, onReady }) {
-  const [index, setIndex] = useState(0);
-  const [ready, setReady] = useState(false);
-  const [finished, setFinished] = useState(false);
-  const timer = useRef();
-  const mediaRef = useRef();
-  const nextLock = useRef(false);
-  const callbacks = useRef({ onReady, onComplete });
-  callbacks.current = { onReady, onComplete };
-  const items = playlist?.items || [];
-  const item = items[index];
   const identity = (playlist?.id || '') + ':' + (playlist?.revision || '') + ':' + (runId || '');
+  return (
+    <BufferedSequence
+      key={identity}
+      playlist={playlist}
+      loop={loop}
+      onComplete={onComplete}
+      onReady={onReady}
+    />
+  );
+}
+
+function SequenceMedia({ entry, active, playing, loop, dispatch }) {
+  const { item, key } = entry;
+  const mediaRef = useRef();
+  const mounted = useRef(false);
+  const video = item.mime_type.startsWith('video/');
   useEffect(() => {
-    clearTimeout(timer.current);
-    setIndex(0);
-    setReady(false);
-    setFinished(false);
-  }, [identity]);
-  const advance = useCallback(() => {
-    if (nextLock.current) return;
-    nextLock.current = true;
-    clearTimeout(timer.current);
-    if (index + 1 >= items.length && !loop) {
-      setFinished(true);
-      callbacks.current.onReady?.(false);
-      callbacks.current.onComplete?.();
-      return;
-    }
-    setReady(false);
-    setIndex((i) => (i + 1) % Math.max(items.length, 1));
-    // Single-item loop stays mounted and keeps its video running.
-    if (items.length === 1 && loop) {
-      nextLock.current = false;
-      setReady(true);
-    }
-  }, [index, items.length, loop]);
-  useEffect(() => {
-    nextLock.current = false;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const ready = () => dispatch({ type: 'ready', key });
+  const failed = () => dispatch({ type: 'failed', key });
+  const imageLoaded = () => {
     const node = mediaRef.current;
-    const loaded = Boolean(
-      node &&
-      (node.tagName === 'IMG' ? node.complete && node.naturalWidth > 0 : node.readyState >= 3),
-    );
-    setReady(loaded);
-    callbacks.current.onReady?.(loaded);
-  }, [index, identity]);
-  useEffect(() => {
-    clearTimeout(timer.current);
-    if (!ready || !item || finished) return;
-    callbacks.current.onReady?.(true);
-    if (items.length > 1 || !loop) timer.current = setTimeout(advance, item.play_seconds * 1000);
-    return () => clearTimeout(timer.current);
-  }, [ready, index, identity, finished, advance, item?.play_seconds, items.length, loop]);
-  useEffect(() => {
-    if (!item || finished) return;
-    const loadTimeout = setTimeout(() => {
-      if (!ready && (items.length > 1 || !loop)) advance();
-    }, 10_000);
-    return () => clearTimeout(loadTimeout);
-  }, [index, identity, ready, item, finished, advance]);
-  if (!item || finished) return null;
-  const loaded = () => setReady(true);
-  const failed = () => {
-    setReady(false);
-    callbacks.current.onReady?.(false);
-    if (items.length > 1 || !loop) advance();
+    if (!node?.naturalWidth) return;
+    // Decode before promotion, including images already in the browser cache.
+    Promise.resolve(node.decode?.())
+      .then(() => {
+        if (mounted.current) ready();
+      })
+      .catch(() => {
+        if (mounted.current) failed();
+      });
   };
+  useEffect(() => {
+    const node = mediaRef.current;
+    if (video && node?.readyState >= 3) ready();
+    else if (!video && node?.complete && node.naturalWidth > 0) imageLoaded();
+  }, [key]);
+  useEffect(() => {
+    if (!video) return;
+    const node = mediaRef.current;
+    let disposed = false;
+    if (playing)
+      node.play().catch(() => {
+        if (!disposed) failed();
+      });
+    else node.pause();
+    return () => {
+      disposed = true;
+      node.pause();
+    };
+  }, [playing, key]);
   return (
     <div
-      className={'media-sequence ' + (ready ? 'media-ready' : '')}
-      data-playlist-id={playlist.id}
+      className="media-frame"
+      data-media-id={item.id}
+      data-active={active ? 'true' : 'false'}
+      style={{ position: 'absolute', inset: 0, visibility: active ? 'visible' : 'hidden' }}
     >
-      {item.mime_type.startsWith('video/') ? (
+      {video ? (
         <video
           ref={mediaRef}
-          key={item.id + ':' + index}
           src={item.url}
-          autoPlay
           muted
           playsInline
           preload="auto"
-          loop={loop && items.length === 1}
-          onCanPlay={loaded}
-          onEnded={advance}
+          loop={active && loop}
+          onCanPlay={ready}
+          onEnded={() => active && dispatch({ type: 'advance', key })}
           onError={failed}
         />
       ) : (
-        <img
-          ref={mediaRef}
-          key={item.id + ':' + index}
-          src={item.url}
-          alt=""
-          onLoad={loaded}
-          onError={failed}
-        />
+        <img ref={mediaRef} src={item.url} alt="" onLoad={imageLoaded} onError={failed} />
       )}
+    </div>
+  );
+}
+
+function BufferedSequence({ playlist, loop, onComplete, onReady }) {
+  const items = playlist?.items || [];
+  const callbacks = useRef({ onReady, onComplete });
+  callbacks.current = { onReady, onComplete };
+  const entry = (index, key) => {
+    if (!items.length || (!loop && index >= items.length)) return null;
+    index %= items.length;
+    return { index, key, item: items[index] };
+  };
+  const finish = (s) => ({ ...s, current: null, pending: null, finished: true });
+  const promote = (s) => ({
+    current: s.pending,
+    pending: loop && items.length === 1 ? null : entry(s.pending.index + 1, s.serial + 1),
+    serial: s.serial + 1,
+    pendingReady: false,
+    requested: false,
+    failures: 0,
+    finished: false,
+  });
+  const [sequence, dispatch] = useReducer(
+    (s, action) => {
+      if (s.finished) return s;
+      if (action.type === 'ready') {
+        if (action.key !== s.pending?.key || s.pendingReady) return s;
+        return s.requested ? promote(s) : { ...s, pendingReady: true };
+      }
+      if (action.type === 'advance') {
+        // Ignore duplicate timer/ended events from the outgoing media.
+        if (action.key !== s.current?.key || (loop && items.length === 1)) return s;
+        if (!s.pending) return finish(s);
+        return s.pendingReady ? promote(s) : { ...s, requested: true };
+      }
+      if (action.type === 'failed') {
+        if (action.key === s.current?.key) {
+          if (!s.pending) return finish(s);
+          return s.pendingReady ? promote(s) : { ...s, current: null, requested: true };
+        }
+        if (action.key !== s.pending?.key) return s;
+        const failures = s.failures + 1;
+        const pending = failures >= items.length ? null : entry(s.pending.index + 1, s.serial + 1);
+        // Skip failed candidates, but let the current file finish its display time.
+        if (!pending && s.requested) return finish(s);
+        return { ...s, pending, pendingReady: false, failures, serial: s.serial + 1 };
+      }
+      return s;
+    },
+    null,
+    () => ({
+      current: null,
+      pending: entry(0, 0),
+      serial: 0,
+      pendingReady: false,
+      requested: true,
+      failures: 0,
+      finished: !items.length,
+    }),
+  );
+  const { current, pending, pendingReady, requested, finished } = sequence;
+  const visible = Boolean(current) && !finished;
+  useEffect(() => {
+    callbacks.current.onReady?.(visible);
+  }, [visible]);
+  useEffect(() => {
+    if (finished) callbacks.current.onComplete?.();
+  }, [finished]);
+  useEffect(() => {
+    if (!current || finished || (loop && items.length === 1)) return;
+    const timer = setTimeout(
+      () => dispatch({ type: 'advance', key: current.key }),
+      current.item.play_seconds * 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [current?.key, finished, loop, items.length]);
+  useEffect(() => {
+    if (!pending || pendingReady || finished) return;
+    const timeout = setTimeout(() => dispatch({ type: 'failed', key: pending.key }), 10_000);
+    return () => clearTimeout(timeout);
+  }, [pending?.key, pendingReady, finished]);
+  if (finished) return null;
+  return (
+    <div
+      className={'media-sequence ' + (visible ? 'media-ready' : '')}
+      data-playlist-id={playlist?.id}
+    >
+      {[current, pending].filter(Boolean).map((media) => (
+        <SequenceMedia
+          key={media.key}
+          entry={media}
+          active={media.key === current?.key}
+          playing={media.key === current?.key && !requested}
+          loop={loop && items.length === 1}
+          dispatch={dispatch}
+        />
+      ))}
     </div>
   );
 }

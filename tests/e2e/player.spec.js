@@ -166,17 +166,181 @@ test('panels, mobile layout and persistent video base survive cached overlays, s
             .mode,
       )
       .toBe('base');
+    // Slow image/video transitions must keep the outgoing DOM and client layer visible.
+    const localVideo = await call(tenantContext, '/media', tc, undefined, 'POST', {
+      file: { name: 'local.mp4', mimeType: 'video/mp4', buffer: fs.readFileSync(videoPath) },
+    });
+    const secondImage = await call(tenantContext, '/media', tc, undefined, 'POST', {
+      file: { name: 'second.png', mimeType: 'image/png', buffer: fs.readFileSync(imagePath) },
+    });
+    const mixed = await call(tenantContext, '/playlists', tc, {
+      name: 'Slow mixed transitions',
+      items: [
+        { media_id: image.id, duration_seconds: 1 },
+        { media_id: localVideo.id, duration_seconds: 1 },
+        { media_id: secondImage.id, duration_seconds: 2 },
+      ],
+    });
+    let releaseVideo, releaseImage;
+    const videoGate = new Promise((resolve) => (releaseVideo = resolve));
+    const imageGate = new Promise((resolve) => (releaseImage = resolve));
+    let videoRequested = false,
+      imageRequested = false;
+    const videoRoute = '**/api/media/' + localVideo.id + '/content**';
+    const imageRoute = '**/api/media/' + secondImage.id + '/content**';
+    await player.route(videoRoute, async (route) => {
+      videoRequested = true;
+      await videoGate;
+      await route.continue();
+    });
+    await player.route(imageRoute, async (route) => {
+      imageRequested = true;
+      await imageGate;
+      await route.continue();
+    });
+    try {
+      await call(tenantContext, '/screens/' + screen.id + '/playback', tc, {
+        mode: 'client',
+        playlist_id: mixed.id,
+      });
+      await expect(layer).toHaveCSS('opacity', '1');
+      await player.evaluate(() => {
+        window.outgoingImage = document.querySelector('.layer-cliente img');
+        window.transitionFlashFrames = 0;
+        window.transitionObservedFrames = 0;
+        window.watchTransitions = true;
+        const observe = () => {
+          if (!window.watchTransitions) return;
+          const layer = document.querySelector('.layer-cliente');
+          const sequence = layer.querySelector('.media-sequence');
+          window.transitionObservedFrames++;
+          if (
+            Number(getComputedStyle(layer).opacity) < 1 ||
+            !sequence ||
+            Number(getComputedStyle(sequence).opacity) < 1
+          )
+            window.transitionFlashFrames++;
+          requestAnimationFrame(observe);
+        };
+        requestAnimationFrame(observe);
+      });
+      await expect.poll(() => videoRequested).toBe(true);
+      await player.waitForTimeout(1500);
+      await expect(layer).toHaveCSS('opacity', '1');
+      expect(await player.evaluate(() => window.outgoingImage.isConnected)).toBeTruthy();
+      releaseVideo();
+      await player.waitForFunction(
+        () => document.querySelector('.layer-cliente video')?.currentTime > 0.1,
+      );
+      await player.evaluate(() => {
+        window.outgoingVideo = document.querySelector('.layer-cliente video');
+      });
+      await expect.poll(() => imageRequested).toBe(true);
+      await player.waitForTimeout(1500);
+      await expect(layer).toHaveCSS('opacity', '1');
+      expect(await player.evaluate(() => window.outgoingVideo.isConnected)).toBeTruthy();
+      expect(await player.evaluate(() => window.outgoingVideo.currentTime)).toBeGreaterThan(0.1);
+      releaseImage();
+      await expect(layer.locator('img[src*="' + secondImage.id + '"]')).toBeVisible();
+      const observed = await player.evaluate(() => {
+        window.watchTransitions = false;
+        return {
+          flashes: window.transitionFlashFrames,
+          frames: window.transitionObservedFrames,
+          baseUnchanged:
+            window.baseVideo === document.querySelector('.layer-base video') &&
+            !window.baseVideo.paused,
+        };
+      });
+      expect(observed.frames).toBeGreaterThan(10);
+      expect(observed.flashes).toBe(0);
+      expect(observed.baseUnchanged).toBeTruthy();
+      await expect(layer).toHaveCSS('opacity', '0', { timeout: 6000 });
+    } finally {
+      releaseVideo();
+      releaseImage();
+      await player.evaluate(() => {
+        window.watchTransitions = false;
+      });
+      await player.unroute(videoRoute);
+      await player.unroute(imageRoute);
+    }
+    const failedRoute = '**/api/media/' + image.id + '/content**';
+    await player.route(failedRoute, (route) => route.abort());
+    try {
+      const skipFailed = await call(tenantContext, '/playlists', tc, {
+        name: 'Skip broken files',
+        items: [
+          { media_id: image.id, duration_seconds: 1 },
+          { media_id: secondImage.id, duration_seconds: 2 },
+          { media_id: image.id, duration_seconds: 1 },
+        ],
+      });
+      await call(tenantContext, '/screens/' + screen.id + '/playback', tc, {
+        mode: 'client',
+        playlist_id: skipFailed.id,
+      });
+      await expect(layer).toHaveCSS('opacity', '1');
+      await expect(layer.locator('[data-active=true] img')).toHaveAttribute(
+        'src',
+        new RegExp(secondImage.id),
+      );
+      await expect(layer).toHaveCSS('opacity', '0', { timeout: 6000 });
+    } finally {
+      await player.unroute(failedRoute);
+    }
+    const cachedLoop = await call(tenantContext, '/playlists', tc, {
+      name: 'Cached repeated images',
+      items: [
+        { media_id: image.id, duration_seconds: 1 },
+        { media_id: image.id, duration_seconds: 1 },
+        { media_id: secondImage.id, duration_seconds: 1 },
+      ],
+    });
     const start = new Date(Date.now() - 60_000);
     const end = new Date(Date.now() + 3600_000);
     const schedule = await call(tenantContext, '/schedules', tc, {
       screen_id: screen.id,
-      playlist_id: overlay.id,
+      playlist_id: cachedLoop.id,
       day_of_week: start.getUTCDay(),
       start_time: start.toISOString().slice(11, 16),
       end_time: end.toISOString().slice(11, 16),
       timezone: 'UTC',
     });
     await expect(layer).toHaveCSS('opacity', '1');
+    await player.evaluate(() => {
+      window.loopChanges = 0;
+      window.loopFlashes = 0;
+      window.watchLoop = true;
+      let last;
+      const observe = () => {
+        if (!window.watchLoop) return;
+        const layer = document.querySelector('.layer-cliente');
+        const sequence = layer.querySelector('.media-sequence');
+        const active = sequence?.querySelector('[data-active=true]');
+        if (active && active !== last) {
+          window.loopChanges++;
+          last = active;
+        }
+        if (
+          Number(getComputedStyle(layer).opacity) < 1 ||
+          !sequence ||
+          Number(getComputedStyle(sequence).opacity) < 1
+        )
+          window.loopFlashes++;
+        requestAnimationFrame(observe);
+      };
+      requestAnimationFrame(observe);
+    });
+    await expect
+      .poll(() => player.evaluate(() => window.loopChanges), { timeout: 8000 })
+      .toBeGreaterThanOrEqual(6);
+    expect(
+      await player.evaluate(() => {
+        window.watchLoop = false;
+        return window.loopFlashes;
+      }),
+    ).toBe(0);
     await playback('base');
     await expect(layer).toHaveCSS('opacity', '0');
     await call(tenantContext, '/schedules/' + schedule.id, tc, undefined, 'DELETE');
